@@ -100,17 +100,17 @@ auth.get('/callback', async (c) => {
         .bind(accountId, userId, userInfo.email, accessToken, refreshToken, expiresAt)
         .run()
 
-      // Add calendars
+      // Add calendars (disabled by default for linked accounts)
       for (const cal of calendars) {
         await c.env.DB.prepare(
           `INSERT INTO selected_calendars (id, linked_account_id, calendar_id, calendar_name, is_enabled)
-           VALUES (?, ?, ?, ?, 1)`
+           VALUES (?, ?, ?, ?, 0)`
         )
           .bind(crypto.randomUUID(), accountId, cal.id, cal.summary)
           .run()
       }
 
-      return c.redirect(`${c.env.FRONTEND_URL}/settings`)
+      return c.redirect(`${c.env.FRONTEND_URL}/settings?linked=true`)
     }
 
     // Regular login/signup

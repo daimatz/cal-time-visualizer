@@ -142,9 +142,29 @@ export interface EventCategory {
   categoryId: string
 }
 
+export interface ReportEvent {
+  id: string
+  title: string
+  start: string
+  end: string
+  attendees: string[]
+  calendarName: string
+  categoryId?: string
+  categoryName?: string
+  categoryColor?: string
+}
+
+export interface TopAttendee {
+  email: string
+  name: string
+  minutes: number
+  percentage: number
+}
+
 export interface ReportData {
   period: { start: string; end: string }
   totalMinutes: number
+  eventCount: number
   categories: {
     id: string
     name: string
@@ -156,6 +176,8 @@ export interface ReportData {
     date: string
     categories: { [categoryId: string]: number }
   }[]
+  events: ReportEvent[]
+  topAttendees: TopAttendee[]
 }
 
 export interface Settings {

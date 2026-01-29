@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import {
@@ -13,14 +14,20 @@ import {
 } from '@/lib/api'
 
 export function SettingsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [accounts, setAccounts] = useState<LinkedAccount[]>([])
   const [calendars, setCalendars] = useState<Calendar[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
+  const [showLinkedMessage, setShowLinkedMessage] = useState(false)
 
   useEffect(() => {
+    if (searchParams.get('linked') === 'true') {
+      setShowLinkedMessage(true)
+      setSearchParams({}, { replace: true })
+    }
     loadData()
   }, [])
 
@@ -103,6 +110,20 @@ export function SettingsPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-3xl font-bold">Settings</h1>
+
+      {showLinkedMessage && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-md flex items-center justify-between">
+          <p>
+            アカウントを連携しました。下のカレンダー一覧から、集計に含めるカレンダーを有効にしてください。
+          </p>
+          <button
+            onClick={() => setShowLinkedMessage(false)}
+            className="text-blue-600 hover:text-blue-800"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <Card>
         <CardHeader>

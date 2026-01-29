@@ -71,6 +71,18 @@ report.post('/send', async (c) => {
   return c.json({ success: true })
 })
 
+interface EventData {
+  id: string
+  title: string
+  start: string
+  end: string
+  attendees: string[]
+  calendarName: string
+  categoryId?: string
+  categoryName?: string
+  categoryColor?: string
+}
+
 async function generateReportData(
   env: Env,
   userId: string,
@@ -102,6 +114,10 @@ async function generateReportData(
     .bind(userId)
     .all<{ id: string; name: string; color: string }>()
 
+  const categoryMap = new Map(
+    categoriesResult.results.map((c) => [c.id, { name: c.name, color: c.color }])
+  )
+
   // Get cached event categories
   const eventCategoriesResult = await env.DB.prepare(
     'SELECT event_id, category_id FROM event_categories WHERE user_id = ?'
@@ -114,14 +130,6 @@ async function generateReportData(
   )
 
   // Fetch all events
-  interface EventData {
-    id: string
-    title: string
-    start: string
-    end: string
-    attendeeCount: number
-    calendarName: string
-  }
   const allEvents: EventData[] = []
 
   const accountCalendars = new Map<string, typeof calendarsResult.results>()
@@ -131,7 +139,7 @@ async function generateReportData(
     accountCalendars.set(cal.account_id, existing)
   }
 
-  for (const [accountId, cals] of accountCalendars) {
+  for (const [, cals] of accountCalendars) {
     const account = cals[0]
     try {
       const accessToken = await getValidAccessToken(env, {
@@ -146,12 +154,16 @@ async function generateReportData(
         for (const event of googleEvents) {
           if (!event.start?.dateTime) continue // Skip all-day events
 
+          const attendees = (event.attendees || [])
+            .map((a) => a.email)
+            .filter((email): email is string => !!email)
+
           allEvents.push({
             id: event.id,
             title: event.summary || '(No title)',
             start: event.start.dateTime,
             end: event.end?.dateTime || event.start.dateTime,
-            attendeeCount: event.attendees?.length || 1,
+            attendees,
             calendarName: cal.calendar_name,
           })
         }
@@ -171,7 +183,7 @@ async function generateReportData(
         uncategorizedEvents.map((e) => ({
           id: e.id,
           title: e.title,
-          attendeeCount: e.attendeeCount,
+          attendeeCount: e.attendees.length || 1,
           calendarName: e.calendarName,
         })),
         categoriesResult.results,
@@ -194,33 +206,67 @@ async function generateReportData(
     }
   }
 
+  // Add category info to events
+  for (const event of allEvents) {
+    const categoryId = eventCategoryMap.get(event.id)
+    if (categoryId) {
+      event.categoryId = categoryId
+      const cat = categoryMap.get(categoryId)
+      if (cat) {
+        event.categoryName = cat.name
+        event.categoryColor = cat.color
+      }
+    }
+  }
+
   // Calculate statistics
   const categoryMinutes = new Map<string, number>()
   const dailyData = new Map<string, Map<string, number>>()
+  const attendeeMinutes = new Map<string, number>()
 
   for (const event of allEvents) {
     const categoryId = eventCategoryMap.get(event.id)
-    if (!categoryId) continue
-
     const duration = Math.round(
       (new Date(event.end).getTime() - new Date(event.start).getTime()) / 60000
     )
     const date = event.start.split('T')[0]
 
-    categoryMinutes.set(categoryId, (categoryMinutes.get(categoryId) || 0) + duration)
+    if (categoryId) {
+      categoryMinutes.set(categoryId, (categoryMinutes.get(categoryId) || 0) + duration)
 
-    if (!dailyData.has(date)) {
-      dailyData.set(date, new Map())
+      if (!dailyData.has(date)) {
+        dailyData.set(date, new Map())
+      }
+      const dayData = dailyData.get(date)!
+      dayData.set(categoryId, (dayData.get(categoryId) || 0) + duration)
     }
-    const dayData = dailyData.get(date)!
-    dayData.set(categoryId, (dayData.get(categoryId) || 0) + duration)
+
+    // Count time per attendee
+    for (const attendee of event.attendees) {
+      attendeeMinutes.set(attendee, (attendeeMinutes.get(attendee) || 0) + duration)
+    }
   }
 
   const totalMinutes = Array.from(categoryMinutes.values()).reduce((a, b) => a + b, 0)
 
+  // Sort attendees by time
+  const topAttendees = Array.from(attendeeMinutes.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([email, minutes]) => ({
+      email,
+      name: email.split('@')[0], // Simple name extraction
+      minutes,
+      percentage: totalMinutes > 0 ? (minutes / totalMinutes) * 100 : 0,
+    }))
+
+  // Sort events by start time
+  allEvents.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+
   return {
     period: { start, end },
     totalMinutes,
+    eventCount: allEvents.length,
     categories: categoriesResult.results.map((cat) => {
       const minutes = categoryMinutes.get(cat.id) || 0
       return {
@@ -237,6 +283,18 @@ async function generateReportData(
         date,
         categories: Object.fromEntries(cats),
       })),
+    events: allEvents.map((e) => ({
+      id: e.id,
+      title: e.title,
+      start: e.start,
+      end: e.end,
+      attendees: e.attendees,
+      calendarName: e.calendarName,
+      categoryId: e.categoryId,
+      categoryName: e.categoryName,
+      categoryColor: e.categoryColor,
+    })),
+    topAttendees,
   }
 }
 
