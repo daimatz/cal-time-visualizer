@@ -1,0 +1,35 @@
+{
+  "name": "cal-time-visualizer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Google Calendar time usage visualizer with AI categorization",
+  "homepage": "https://github.com/daimatz/cal-time-visualizer#readme",
+  "bugs": {
+    "url": "https://github.com/daimatz/cal-time-visualizer/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/daimatz/cal-time-visualizer.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "dev:web": "pnpm --filter @cal-time-visualizer/web dev",
+    "dev:api": "pnpm --filter @cal-time-visualizer/api dev",
+    "build": "pnpm -r build",
+    "build:web": "pnpm --filter @cal-time-visualizer/web build",
+    "build:api": "pnpm --filter @cal-time-visualizer/api build",
+    "deploy": "pnpm -r deploy",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "db:migrate": "pnpm --filter @cal-time-visualizer/api db:migrate",
+    "db:migrate:local": "pnpm --filter @cal-time-visualizer/api db:migrate:local"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

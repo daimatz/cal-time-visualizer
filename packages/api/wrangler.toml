@@ -1,0 +1,29 @@
+name = "cal-time-visualizer-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cal-time-visualizer"
+database_id = "local"  # Replace with actual ID for production
+
+[[kv_namespaces]]
+binding = "SESSION_KV"
+id = "local"  # Replace with actual ID for production
+preview_id = "local"
+
+[vars]
+FRONTEND_URL = "http://localhost:5173"
+API_URL = "http://localhost:8787"
+
+# Secrets (set via wrangler secret put):
+# GOOGLE_CLIENT_ID
+# GOOGLE_CLIENT_SECRET
+# OPENAI_API_KEY
+# MAILGUN_API_KEY
+# MAILGUN_DOMAIN
+# ENCRYPTION_KEY
+
+[triggers]
+crons = ["0 0 * * 0"]  # Every Sunday at 00:00 UTC (09:00 JST)
