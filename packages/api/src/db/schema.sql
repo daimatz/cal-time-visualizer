@@ -83,3 +83,16 @@ CREATE TABLE IF NOT EXISTS report_settings (
   timezone TEXT NOT NULL DEFAULT 'Asia/Tokyo',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Event title to category cache (for similar event matching)
+CREATE TABLE IF NOT EXISTS event_title_cache (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  normalized_title TEXT NOT NULL,
+  category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, normalized_title)
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_title_cache_user ON event_title_cache(user_id);
+CREATE INDEX IF NOT EXISTS idx_event_title_cache_title ON event_title_cache(normalized_title);

@@ -71,6 +71,13 @@ export const categoryApi = {
   delete: (id: string) => api.delete<void>(`/api/categories/${id}`),
   generate: () =>
     api.post<{ categories: Category[] }>('/api/categories/generate'),
+  // Rules
+  getRules: (categoryId: string) =>
+    api.get<{ rules: CategoryRule[] }>(`/api/categories/${categoryId}/rules`),
+  addRule: (categoryId: string, data: { ruleType: string; ruleValue: string }) =>
+    api.post<{ rule: CategoryRule }>(`/api/categories/${categoryId}/rules`, data),
+  deleteRule: (categoryId: string, ruleId: string) =>
+    api.delete<void>(`/api/categories/${categoryId}/rules/${ruleId}`),
 }
 
 // Categorize
@@ -135,6 +142,12 @@ export interface Category {
   color: string
   sortOrder: number
   isSystem: boolean
+}
+
+export interface CategoryRule {
+  id: string
+  ruleType: 'keyword' | 'exact' | 'prefix'
+  ruleValue: string
 }
 
 export interface EventCategory {

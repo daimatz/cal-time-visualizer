@@ -10,6 +10,7 @@ import {
   type LinkedAccount,
   type Calendar,
   type Category,
+  type CategoryRule,
   type Settings,
 } from '@/lib/api'
 
@@ -22,6 +23,10 @@ export function SettingsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [showLinkedMessage, setShowLinkedMessage] = useState(false)
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
+  const [categoryRules, setCategoryRules] = useState<Map<string, CategoryRule[]>>(new Map())
+  const [newRuleValue, setNewRuleValue] = useState('')
+  const [newRuleType, setNewRuleType] = useState<'keyword' | 'exact' | 'prefix'>('keyword')
 
   useEffect(() => {
     if (searchParams.get('linked') === 'true') {
@@ -92,6 +97,61 @@ export function SettingsPage() {
       setCategories((prev) => prev.filter((cat) => cat.id !== id))
     } catch (error) {
       console.error('Failed to delete category:', error)
+    }
+  }
+
+  async function handleExpandCategory(categoryId: string) {
+    if (expandedCategory === categoryId) {
+      setExpandedCategory(null)
+      return
+    }
+
+    setExpandedCategory(categoryId)
+
+    // Load rules if not already loaded
+    if (!categoryRules.has(categoryId)) {
+      try {
+        const result = await categoryApi.getRules(categoryId)
+        setCategoryRules((prev) => new Map(prev).set(categoryId, result.rules))
+      } catch (error) {
+        console.error('Failed to load rules:', error)
+      }
+    }
+  }
+
+  async function handleAddRule(categoryId: string) {
+    if (!newRuleValue.trim()) return
+    try {
+      const result = await categoryApi.addRule(categoryId, {
+        ruleType: newRuleType,
+        ruleValue: newRuleValue.trim(),
+      })
+      setCategoryRules((prev) => {
+        const newMap = new Map(prev)
+        const existing = newMap.get(categoryId) || []
+        newMap.set(categoryId, [...existing, result.rule])
+        return newMap
+      })
+      setNewRuleValue('')
+    } catch (error) {
+      console.error('Failed to add rule:', error)
+    }
+  }
+
+  async function handleDeleteRule(categoryId: string, ruleId: string) {
+    try {
+      await categoryApi.deleteRule(categoryId, ruleId)
+      setCategoryRules((prev) => {
+        const newMap = new Map(prev)
+        const existing = newMap.get(categoryId) || []
+        newMap.set(
+          categoryId,
+          existing.filter((r) => r.id !== ruleId)
+        )
+        return newMap
+      })
+    } catch (error) {
+      console.error('Failed to delete rule:', error)
     }
   }
 
@@ -195,27 +255,95 @@ export function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           {categories.map((category) => (
-            <div
-              key={category.id}
-              className="flex items-center justify-between py-2 border-b last:border-0"
-            >
-              <div className="flex items-center gap-3">
-                <span
-                  className="w-4 h-4 rounded-full"
-                  style={{ backgroundColor: category.color }}
-                />
-                <span>{category.name}</span>
-                {category.isSystem && (
-                  <span className="text-xs text-muted-foreground">(AI生成)</span>
-                )}
+            <div key={category.id} className="border-b last:border-0">
+              <div className="flex items-center justify-between py-2">
+                <div
+                  className="flex items-center gap-3 cursor-pointer flex-1"
+                  onClick={() => handleExpandCategory(category.id)}
+                >
+                  <span
+                    className="w-4 h-4 rounded-full"
+                    style={{ backgroundColor: category.color }}
+                  />
+                  <span>{category.name}</span>
+                  {category.isSystem && (
+                    <span className="text-xs text-muted-foreground">(AI生成)</span>
+                  )}
+                  <span className="text-xs text-muted-foreground ml-2">
+                    {expandedCategory === category.id ? '▼' : '▶'} ルール
+                  </span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDeleteCategory(category.id)}
+                >
+                  削除
+                </Button>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleDeleteCategory(category.id)}
-              >
-                削除
-              </Button>
+
+              {expandedCategory === category.id && (
+                <div className="ml-7 pb-3 space-y-2">
+                  <div className="text-sm text-muted-foreground mb-2">
+                    キーワードルール: タイトルにマッチしたイベントを自動でこのカテゴリに分類
+                  </div>
+
+                  {/* Existing rules */}
+                  {(categoryRules.get(category.id) || []).map((rule) => (
+                    <div
+                      key={rule.id}
+                      className="flex items-center gap-2 text-sm bg-muted/50 px-2 py-1 rounded"
+                    >
+                      <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">
+                        {rule.ruleType === 'keyword' && '含む'}
+                        {rule.ruleType === 'exact' && '完全一致'}
+                        {rule.ruleType === 'prefix' && '先頭一致'}
+                      </span>
+                      <span className="flex-1">{rule.ruleValue}</span>
+                      <button
+                        onClick={() => handleDeleteRule(category.id, rule.id)}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* Add new rule */}
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={newRuleType}
+                      onChange={(e) =>
+                        setNewRuleType(e.target.value as typeof newRuleType)
+                      }
+                      className="text-sm rounded border border-input bg-background px-2 py-1"
+                    >
+                      <option value="keyword">含む</option>
+                      <option value="exact">完全一致</option>
+                      <option value="prefix">先頭一致</option>
+                    </select>
+                    <input
+                      type="text"
+                      value={newRuleValue}
+                      onChange={(e) => setNewRuleValue(e.target.value)}
+                      placeholder="キーワードを入力..."
+                      className="flex-1 text-sm rounded border border-input bg-background px-2 py-1"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleAddRule(category.id)
+                        }
+                      }}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleAddRule(category.id)}
+                    >
+                      追加
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </CardContent>

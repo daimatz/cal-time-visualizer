@@ -121,6 +121,97 @@ categories.delete('/:id', async (c) => {
   return c.json({ success: true })
 })
 
+// Get rules for a category
+categories.get('/:id/rules', async (c) => {
+  const user = c.get('user')
+  const categoryId = c.req.param('id')
+
+  // Verify ownership
+  const category = await c.env.DB.prepare(
+    'SELECT id FROM categories WHERE id = ? AND user_id = ?'
+  )
+    .bind(categoryId, user.id)
+    .first()
+
+  if (!category) {
+    return c.json({ error: 'Category not found' }, 404)
+  }
+
+  const rules = await c.env.DB.prepare(
+    'SELECT id, rule_type, rule_value FROM category_rules WHERE category_id = ?'
+  )
+    .bind(categoryId)
+    .all<{ id: string; rule_type: string; rule_value: string }>()
+
+  return c.json({
+    rules: rules.results.map((r) => ({
+      id: r.id,
+      ruleType: r.rule_type,
+      ruleValue: r.rule_value,
+    })),
+  })
+})
+
+// Add rule to a category
+categories.post('/:id/rules', async (c) => {
+  const user = c.get('user')
+  const categoryId = c.req.param('id')
+  const { ruleType, ruleValue } = await c.req.json<{
+    ruleType: 'keyword' | 'exact' | 'prefix'
+    ruleValue: string
+  }>()
+
+  if (!ruleType || !ruleValue) {
+    return c.json({ error: 'ruleType and ruleValue are required' }, 400)
+  }
+
+  // Verify ownership
+  const category = await c.env.DB.prepare(
+    'SELECT id FROM categories WHERE id = ? AND user_id = ?'
+  )
+    .bind(categoryId, user.id)
+    .first()
+
+  if (!category) {
+    return c.json({ error: 'Category not found' }, 404)
+  }
+
+  const id = crypto.randomUUID()
+  await c.env.DB.prepare(
+    'INSERT INTO category_rules (id, category_id, rule_type, rule_value) VALUES (?, ?, ?, ?)'
+  )
+    .bind(id, categoryId, ruleType, ruleValue)
+    .run()
+
+  return c.json({
+    rule: { id, ruleType, ruleValue },
+  })
+})
+
+// Delete a rule
+categories.delete('/:categoryId/rules/:ruleId', async (c) => {
+  const user = c.get('user')
+  const categoryId = c.req.param('categoryId')
+  const ruleId = c.req.param('ruleId')
+
+  // Verify ownership
+  const category = await c.env.DB.prepare(
+    'SELECT id FROM categories WHERE id = ? AND user_id = ?'
+  )
+    .bind(categoryId, user.id)
+    .first()
+
+  if (!category) {
+    return c.json({ error: 'Category not found' }, 404)
+  }
+
+  await c.env.DB.prepare('DELETE FROM category_rules WHERE id = ? AND category_id = ?')
+    .bind(ruleId, categoryId)
+    .run()
+
+  return c.json({ success: true })
+})
+
 // Generate categories using AI
 categories.post('/generate', async (c) => {
   const user = c.get('user')

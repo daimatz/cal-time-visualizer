@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth'
 import { getValidAccessToken, getEvents } from '../services/google'
 import { categorizeEvents } from '../services/openai'
 import { sendEmail, generateReportHtml } from '../services/mailgun'
+import { preCategorizeEvents, cacheTitleCategory } from '../services/categorization'
 
 const report = new Hono<{
   Bindings: Env
@@ -178,28 +179,74 @@ async function generateReportData(
 
   if (uncategorizedEvents.length > 0 && categoriesResult.results.length > 0) {
     try {
-      const aiResults = await categorizeEvents(
-        env.OPENAI_API_KEY,
+      // Pre-categorize: Apply keyword rules and similar event matching
+      const preResult = await preCategorizeEvents(
+        env.DB,
+        userId,
         uncategorizedEvents.map((e) => ({
           id: e.id,
           title: e.title,
           attendeeCount: e.attendees.length || 1,
           calendarName: e.calendarName,
-        })),
-        categoriesResult.results,
-        []
+        }))
       )
 
-      for (const result of aiResults) {
-        eventCategoryMap.set(result.eventId, result.categoryId)
-
+      // Store and apply keyword-matched results
+      for (const [eventId, categoryId] of preResult.keywordMatched) {
+        eventCategoryMap.set(eventId, categoryId)
         await env.DB.prepare(
           `INSERT INTO event_categories (id, user_id, event_id, category_id, is_manual)
            VALUES (?, ?, ?, ?, 0)
            ON CONFLICT(user_id, event_id) DO UPDATE SET category_id = ? WHERE is_manual = 0`
         )
-          .bind(crypto.randomUUID(), userId, result.eventId, result.categoryId, result.categoryId)
+          .bind(crypto.randomUUID(), userId, eventId, categoryId, categoryId)
           .run()
+
+        // Cache title for future lookups
+        const event = uncategorizedEvents.find((e) => e.id === eventId)
+        if (event) {
+          await cacheTitleCategory(env.DB, userId, event.title, categoryId)
+        }
+      }
+
+      // Store and apply similar-matched results
+      for (const [eventId, categoryId] of preResult.similarMatched) {
+        eventCategoryMap.set(eventId, categoryId)
+        await env.DB.prepare(
+          `INSERT INTO event_categories (id, user_id, event_id, category_id, is_manual)
+           VALUES (?, ?, ?, ?, 0)
+           ON CONFLICT(user_id, event_id) DO UPDATE SET category_id = ? WHERE is_manual = 0`
+        )
+          .bind(crypto.randomUUID(), userId, eventId, categoryId, categoryId)
+          .run()
+      }
+
+      // Categorize remaining events using OpenAI
+      if (preResult.needsAI.length > 0) {
+        const aiResults = await categorizeEvents(
+          env.OPENAI_API_KEY,
+          preResult.needsAI,
+          categoriesResult.results,
+          []
+        )
+
+        for (const result of aiResults) {
+          eventCategoryMap.set(result.eventId, result.categoryId)
+
+          await env.DB.prepare(
+            `INSERT INTO event_categories (id, user_id, event_id, category_id, is_manual)
+             VALUES (?, ?, ?, ?, 0)
+             ON CONFLICT(user_id, event_id) DO UPDATE SET category_id = ? WHERE is_manual = 0`
+          )
+            .bind(crypto.randomUUID(), userId, result.eventId, result.categoryId, result.categoryId)
+            .run()
+
+          // Cache title for future lookups
+          const event = uncategorizedEvents.find((e) => e.id === result.eventId)
+          if (event) {
+            await cacheTitleCategory(env.DB, userId, event.title, result.categoryId)
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to categorize events:', err)

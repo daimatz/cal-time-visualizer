@@ -3,6 +3,11 @@ import type { Env, User } from '../types'
 import { authMiddleware } from '../middleware/auth'
 import { getValidAccessToken, getEvents } from '../services/google'
 import { categorizeEvents } from '../services/openai'
+import {
+  preCategorizeEvents,
+  cacheTitleCategory,
+  normalizeTitle,
+} from '../services/categorization'
 
 const categorize = new Hono<{
   Bindings: Env
@@ -30,21 +35,6 @@ categorize.post('/', async (c) => {
   if (categoriesResult.results.length === 0) {
     return c.json({ error: 'No categories defined' }, 400)
   }
-
-  // Get category rules
-  const rulesResult = await c.env.DB.prepare(
-    `SELECT cr.category_id, cr.rule_type, cr.rule_value, c.name as category_name
-     FROM category_rules cr
-     JOIN categories c ON cr.category_id = c.id
-     WHERE c.user_id = ?`
-  )
-    .bind(user.id)
-    .all<{ category_id: string; rule_type: string; rule_value: string; category_name: string }>()
-
-  const rules = rulesResult.results.map((r) => ({
-    categoryId: r.category_id,
-    description: `${r.rule_type}: ${r.rule_value} → ${r.category_name}`,
-  }))
 
   // Get events that need categorization (excluding manual ones)
   const manualResult = await c.env.DB.prepare(
@@ -76,12 +66,14 @@ categorize.post('/', async (c) => {
     }>()
 
   // We need to match event IDs to their details
-  // For now, we'll fetch recent events and filter
   const end = new Date()
   const start = new Date()
   start.setDate(start.getDate() - 30)
 
-  const eventMap = new Map<string, { id: string; title: string; attendeeCount: number }>()
+  const eventMap = new Map<
+    string,
+    { id: string; title: string; attendeeCount: number; calendarName: string }
+  >()
 
   const accountCalendars = new Map<string, typeof calendarsResult.results>()
   for (const cal of calendarsResult.results) {
@@ -90,7 +82,7 @@ categorize.post('/', async (c) => {
     accountCalendars.set(cal.account_id, existing)
   }
 
-  for (const [accountId, cals] of accountCalendars) {
+  for (const [, cals] of accountCalendars) {
     const account = cals[0]
     try {
       const accessToken = await getValidAccessToken(c.env, {
@@ -113,6 +105,7 @@ categorize.post('/', async (c) => {
               id: event.id,
               title: event.summary || '(No title)',
               attendeeCount: event.attendees?.length || 1,
+              calendarName: cal.calendar_name,
             })
           }
         }
@@ -136,38 +129,96 @@ categorize.post('/', async (c) => {
     })
   }
 
-  // Categorize using OpenAI
-  const aiResults = await categorizeEvents(
-    c.env.OPENAI_API_KEY,
-    eventsToCategorizData.map((e) => ({
-      id: e.id,
-      title: e.title,
-      attendeeCount: e.attendeeCount,
-      calendarName: '', // Not used in categorization
-    })),
-    categoriesResult.results,
-    rules
-  )
+  // Pre-categorize: Apply keyword rules and similar event matching
+  const preResult = await preCategorizeEvents(c.env.DB, user.id, eventsToCategorizData)
 
-  // Store results in database
-  for (const result of aiResults) {
+  const allResults: { eventId: string; categoryId: string }[] = []
+
+  // Store keyword-matched results
+  for (const [eventId, categoryId] of preResult.keywordMatched) {
     await c.env.DB.prepare(
       `INSERT INTO event_categories (id, user_id, event_id, category_id, is_manual)
        VALUES (?, ?, ?, ?, 0)
        ON CONFLICT(user_id, event_id) DO UPDATE SET category_id = ? WHERE is_manual = 0`
     )
-      .bind(crypto.randomUUID(), user.id, result.eventId, result.categoryId, result.categoryId)
+      .bind(crypto.randomUUID(), user.id, eventId, categoryId, categoryId)
       .run()
+
+    // Cache title for future lookups
+    const event = eventMap.get(eventId)
+    if (event) {
+      await cacheTitleCategory(c.env.DB, user.id, event.title, categoryId)
+    }
+
+    allResults.push({ eventId, categoryId })
   }
 
-  // Combine AI results with manual ones
-  const allResults = [
-    ...aiResults,
-    ...Array.from(manualMap.entries()).map(([eventId, categoryId]) => ({
-      eventId,
-      categoryId,
-    })),
-  ]
+  // Store similar-matched results
+  for (const [eventId, categoryId] of preResult.similarMatched) {
+    await c.env.DB.prepare(
+      `INSERT INTO event_categories (id, user_id, event_id, category_id, is_manual)
+       VALUES (?, ?, ?, ?, 0)
+       ON CONFLICT(user_id, event_id) DO UPDATE SET category_id = ? WHERE is_manual = 0`
+    )
+      .bind(crypto.randomUUID(), user.id, eventId, categoryId, categoryId)
+      .run()
+
+    allResults.push({ eventId, categoryId })
+  }
+
+  // Categorize remaining events using OpenAI
+  if (preResult.needsAI.length > 0) {
+    // Get category rules for AI context
+    const rulesResult = await c.env.DB.prepare(
+      `SELECT cr.category_id, cr.rule_type, cr.rule_value, c.name as category_name
+       FROM category_rules cr
+       JOIN categories c ON cr.category_id = c.id
+       WHERE c.user_id = ?`
+    )
+      .bind(user.id)
+      .all<{ category_id: string; rule_type: string; rule_value: string; category_name: string }>()
+
+    const rules = rulesResult.results.map((r) => ({
+      categoryId: r.category_id,
+      description: `${r.rule_type}: ${r.rule_value} → ${r.category_name}`,
+    }))
+
+    const aiResults = await categorizeEvents(
+      c.env.OPENAI_API_KEY,
+      preResult.needsAI.map((e) => ({
+        id: e.id,
+        title: e.title,
+        attendeeCount: e.attendeeCount,
+        calendarName: e.calendarName,
+      })),
+      categoriesResult.results,
+      rules
+    )
+
+    // Store AI results and cache titles
+    for (const result of aiResults) {
+      await c.env.DB.prepare(
+        `INSERT INTO event_categories (id, user_id, event_id, category_id, is_manual)
+         VALUES (?, ?, ?, ?, 0)
+         ON CONFLICT(user_id, event_id) DO UPDATE SET category_id = ? WHERE is_manual = 0`
+      )
+        .bind(crypto.randomUUID(), user.id, result.eventId, result.categoryId, result.categoryId)
+        .run()
+
+      // Cache title for future lookups
+      const event = eventMap.get(result.eventId)
+      if (event) {
+        await cacheTitleCategory(c.env.DB, user.id, event.title, result.categoryId)
+      }
+
+      allResults.push(result)
+    }
+  }
+
+  // Add manual categorizations
+  for (const [eventId, categoryId] of manualMap) {
+    allResults.push({ eventId, categoryId })
+  }
 
   return c.json({ results: allResults })
 })
